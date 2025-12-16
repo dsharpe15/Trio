@@ -1,15 +1,17 @@
 default_platform(:ios)
 
-TEAMID = ENV["TEAMID"]
-GH_PAT = ENV["GH_PAT"]
-GITHUB_WORKSPACE = ENV["GITHUB_WORKSPACE"]
-GITHUB_REPOSITORY_OWNER = ENV["GITHUB_REPOSITORY_OWNER"]
-FASTLANE_KEY_ID = ENV["FASTLANE_KEY_ID"]
-FASTLANE_ISSUER_ID = ENV["FASTLANE_ISSUER_ID"]
-FASTLANE_KEY = ENV["FASTLANE_KEY"]
+# ---------- ENV ----------
+TEAMID                    = ENV["TEAMID"]
+GH_PAT                    = ENV["GH_PAT"]
+GITHUB_WORKSPACE           = ENV["GITHUB_WORKSPACE"]
+GITHUB_REPOSITORY_OWNER    = ENV["GITHUB_REPOSITORY_OWNER"]
+FASTLANE_KEY_ID            = ENV["FASTLANE_KEY_ID"]
+FASTLANE_ISSUER_ID         = ENV["FASTLANE_ISSUER_ID"]
+FASTLANE_KEY               = ENV["FASTLANE_KEY"]
+
 ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] = "120"
 
-# ---------- Bundle ID handling ----------
+# ---------- Bundle ID ----------
 xcconfig_path = "#{GITHUB_WORKSPACE}/Config.xcconfig"
 
 if File.exist?(xcconfig_path)
@@ -31,8 +33,10 @@ platform :ios do
   desc "Build Trio"
   lane :build_trio do
     setup_ci if ENV["CI"]
+
     BUNDLE_ID = ENV["BUNDLE_ID"]
 
+    # Ensure correct Team ID everywhere
     update_project_team(
       path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
       teamid: TEAMID
@@ -54,9 +58,13 @@ platform :ios do
       build_number: previous_build_number + 1
     )
 
+    # Pull certs + profiles (App Store)
     match(
       type: "appstore",
-      git_basic_authorization: Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"),
+      readonly: true,
+      git_basic_authorization: Base64.strict_encode64(
+        "#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"
+      ),
       app_identifier: [
         BUNDLE_ID,
         "#{BUNDLE_ID}.watchkitapp",
@@ -65,13 +73,22 @@ platform :ios do
       ]
     )
 
+    # 🔴 THIS IS THE CRITICAL FIX
     gym(
       scheme: "Trio",
-      export_method: "app-store",
       configuration: "Release",
-      output_name: "Trio.ipa",
+      export_method: "app-store",
       destination: "generic/platform=iOS",
-      buildlog_path: "buildlog"
+      output_name: "Trio.ipa",
+      buildlog_path: "buildlog",
+      export_options: {
+        provisioningProfiles: {
+          "#{BUNDLE_ID}" => "match AppStore #{BUNDLE_ID}",
+          "#{BUNDLE_ID}.watchkitapp" => "match AppStore #{BUNDLE_ID}.watchkitapp",
+          "#{BUNDLE_ID}.watchkitapp.watchkitextension" => "match AppStore #{BUNDLE_ID}.watchkitapp.watchkitextension",
+          "#{BUNDLE_ID}.LiveActivity" => "match AppStore #{BUNDLE_ID}.LiveActivity"
+        }
+      }
     )
 
     copy_artifacts(
@@ -98,6 +115,7 @@ platform :ios do
   desc "Check and renew certificates"
   lane :check_and_renew_certificates do
     setup_ci if ENV["CI"]
+
     ENV["MATCH_READONLY"] = "false"
 
     app_store_connect_api_key(
@@ -108,7 +126,9 @@ platform :ios do
 
     match(
       type: "appstore",
-      git_basic_authorization: Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"),
+      git_basic_authorization: Base64.strict_encode64(
+        "#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"
+      ),
       app_identifier: [
         ENV["BUNDLE_ID"],
         "#{ENV["BUNDLE_ID"]}.watchkitapp",
@@ -118,4 +138,3 @@ platform :ios do
     )
   end
 end
-

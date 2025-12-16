@@ -7,135 +7,115 @@ GITHUB_REPOSITORY_OWNER = ENV["GITHUB_REPOSITORY_OWNER"]
 FASTLANE_KEY_ID = ENV["FASTLANE_KEY_ID"]
 FASTLANE_ISSUER_ID = ENV["FASTLANE_ISSUER_ID"]
 FASTLANE_KEY = ENV["FASTLANE_KEY"]
-DEVICE_NAME = ENV["DEVICE_NAME"]
-DEVICE_ID = ENV["DEVICE_ID"]
 ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] = "120"
 
-# Define method to parse xcconfig file, and replace $(DEVELOPMENT_TEAM) with ENV["TEAMID"]
-def parse_xcconfig_file(path)
-  xcconfig = {}
-  File.open(path).each_line do |line|
-    line.strip!
-    next if line.empty? || line.start_with?('//')
-    parts = line.split('=')
-    next if parts.length < 2
-    key, value = parts.map(&:strip)
-    value = value.gsub('$(DEVELOPMENT_TEAM)', TEAMID)
-    xcconfig[key] = value
-  end
-  xcconfig
-end
-
-# Path to config.xcconfig file
+# ---------- Bundle ID handling ----------
 xcconfig_path = "#{GITHUB_WORKSPACE}/Config.xcconfig"
 
-# Load variables from config file if available
 if File.exist?(xcconfig_path)
-  xcconfig = parse_xcconfig_file(xcconfig_path)
-  ENV["BUNDLE_ID"] = xcconfig["BUNDLE_IDENTIFIER"]
-else
-  puts "⚠️ Config.xcconfig not found at #{xcconfig_path} — using hardcoded bundle ID."
-  ENV["BUNDLE_ID"] = "org.dsharpe15.Trio"
+  File.readlines(xcconfig_path).each do |line|
+    if line.strip.start_with?("BUNDLE_IDENTIFIER")
+      ENV["BUNDLE_ID"] = line.split("=").last.strip
+    end
+  end
 end
 
-puts "✅ Using BUNDLE_ID: #{ENV["BUNDLE_ID"]}"
+# Hard fallback (intentional)
+ENV["BUNDLE_ID"] ||= "org.dsharpe15.Trio"
 
+puts "✅ Fastlane using BUNDLE_ID: #{ENV["BUNDLE_ID"]}"
+
+# ---------- iOS ----------
 platform :ios do
+
   desc "Build Trio"
   lane :build_trio do
-    setup_ci if ENV['CI']
+    setup_ci if ENV["CI"]
     BUNDLE_ID = ENV["BUNDLE_ID"]
 
     update_project_team(
       path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
-      teamid: "#{TEAMID}"
+      teamid: TEAMID
     )
 
     api_key = app_store_connect_api_key(
-      key_id: "#{FASTLANE_KEY_ID}",
-      issuer_id: "#{FASTLANE_ISSUER_ID}",
-      key_content: "#{FASTLANE_KEY}"
+      key_id: FASTLANE_KEY_ID,
+      issuer_id: FASTLANE_ISSUER_ID,
+      key_content: FASTLANE_KEY
     )
 
     previous_build_number = latest_testflight_build_number(
-      app_identifier: "#{BUNDLE_ID}",
-      api_key: api_key,
-    )
-
-    current_build_number = previous_build_number + 1
+      app_identifier: BUNDLE_ID,
+      api_key: api_key
+    ) rescue 0
 
     increment_build_number(
       xcodeproj: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
-      build_number: current_build_number
+      build_number: previous_build_number + 1
     )
 
     match(
       type: "appstore",
       git_basic_authorization: Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"),
       app_identifier: [
-        "#{BUNDLE_ID}",
+        BUNDLE_ID,
         "#{BUNDLE_ID}.watchkitapp",
         "#{BUNDLE_ID}.watchkitapp.watchkitextension",
         "#{BUNDLE_ID}.LiveActivity"
       ]
     )
 
-    update_code_signing_settings(
-      path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
-      profile_name: Actions.lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]["#{BUNDLE_ID}"],
-      code_sign_identity: "iPhone Distribution",
-      targets: ["FreeAPS"]
-    )
-
-    update_code_signing_settings(
-      path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
-      profile_name: Actions.lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]["#{BUNDLE_ID}.watchkitapp.watchkitextension"],
-      code_sign_identity: "iPhone Distribution",
-      targets: ["FreeAPSWatch WatchKit Extension"]
-    )
-
-    update_code_signing_settings(
-      path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
-      profile_name: Actions.lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]["#{BUNDLE_ID}.watchkitapp"],
-      code_sign_identity: "iPhone Distribution",
-      targets: ["FreeAPSWatch"]
-    )
-
-    update_code_signing_settings(
-      path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
-      profile_name: Actions.lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]["#{BUNDLE_ID}.LiveActivity"],
-      code_sign_identity: "iPhone Distribution",
-      targets: ["LiveActivityExtension"]
-    )
-
     gym(
-      export_method: "app-store",
       scheme: "Trio",
-      output_name: "Trio.ipa",
+      export_method: "app-store",
       configuration: "Release",
-      destination: 'generic/platform=iOS',
-      buildlog_path: 'buildlog'
+      output_name: "Trio.ipa",
+      destination: "generic/platform=iOS",
+      buildlog_path: "buildlog"
     )
 
     copy_artifacts(
       target_path: "artifacts",
-      artifacts: ["*.mobileprovision", "*.ipa", "*.dSYM.zip"]
+      artifacts: ["*.ipa", "*.dSYM.zip"]
     )
   end
 
-  desc "Push to TestFlight"
+  desc "Upload to TestFlight"
   lane :release do
     api_key = app_store_connect_api_key(
-      key_id: "#{FASTLANE_KEY_ID}",
-      issuer_id: "#{FASTLANE_ISSUER_ID}",
-      key_content: "#{FASTLANE_KEY}"
+      key_id: FASTLANE_KEY_ID,
+      issuer_id: FASTLANE_ISSUER_ID,
+      key_content: FASTLANE_KEY
     )
 
     upload_to_testflight(
       api_key: api_key,
-      skip_submission: false,
       ipa: "Trio.ipa",
-      skip_waiting_for_build_processing: true,
-      changelog: git_branch + " " + last_git_commit[:abbreviated_commit_hash],
+      skip_waiting_for_build_processing: true
     )
+  end
+
+  desc "Check and renew certificates"
+  lane :check_and_renew_certificates do
+    setup_ci if ENV["CI"]
+    ENV["MATCH_READONLY"] = "false"
+
+    app_store_connect_api_key(
+      key_id: FASTLANE_KEY_ID,
+      issuer_id: FASTLANE_ISSUER_ID,
+      key_content: FASTLANE_KEY
+    )
+
+    match(
+      type: "appstore",
+      git_basic_authorization: Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"),
+      app_identifier: [
+        ENV["BUNDLE_ID"],
+        "#{ENV["BUNDLE_ID"]}.watchkitapp",
+        "#{ENV["BUNDLE_ID"]}.watchkitapp.watchkitextension",
+        "#{ENV["BUNDLE_ID"]}.LiveActivity"
+      ]
+    )
+  end
+end
 

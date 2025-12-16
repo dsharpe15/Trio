@@ -1,8 +1,8 @@
 default_platform(:ios)
 
 # ---------- ENV ----------
-TEAMID                    = ENV["TEAMID"]
-GH_PAT                    = ENV["GH_PAT"]
+TEAMID                     = ENV["TEAMID"]
+GH_PAT                     = ENV["GH_PAT"]
 GITHUB_WORKSPACE           = ENV["GITHUB_WORKSPACE"]
 GITHUB_REPOSITORY_OWNER    = ENV["GITHUB_REPOSITORY_OWNER"]
 FASTLANE_KEY_ID            = ENV["FASTLANE_KEY_ID"]
@@ -36,7 +36,6 @@ platform :ios do
 
     BUNDLE_ID = ENV["BUNDLE_ID"]
 
-    # Ensure correct Team ID everywhere
     update_project_team(
       path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
       teamid: TEAMID
@@ -58,7 +57,6 @@ platform :ios do
       build_number: previous_build_number + 1
     )
 
-    # Pull certs + profiles (App Store)
     match(
       type: "appstore",
       readonly: true,
@@ -73,7 +71,6 @@ platform :ios do
       ]
     )
 
-    # 🔴 THIS IS THE CRITICAL FIX
     gym(
       scheme: "Trio",
       configuration: "Release",
@@ -126,6 +123,32 @@ platform :ios do
 
     match(
       type: "appstore",
+      git_basic_authorization: Base64.strict_encode64(
+        "#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"
+      ),
+      app_identifier: [
+        ENV["BUNDLE_ID"],
+        "#{ENV["BUNDLE_ID"]}.watchkitapp",
+        "#{ENV["BUNDLE_ID"]}.watchkitapp.watchkitextension",
+        "#{ENV["BUNDLE_ID"]}.LiveActivity"
+      ]
+    )
+  end
+
+  desc "Create development provisioning profiles if missing"
+  lane :create_development_profiles do
+    setup_ci if ENV["CI"]
+
+    api_key = app_store_connect_api_key(
+      key_id: FASTLANE_KEY_ID,
+      issuer_id: FASTLANE_ISSUER_ID,
+      key_content: FASTLANE_KEY
+    )
+
+    match(
+      type: "development",
+      readonly: false,
+      api_key: api_key,
       git_basic_authorization: Base64.strict_encode64(
         "#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"
       ),
